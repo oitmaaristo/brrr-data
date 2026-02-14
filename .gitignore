@@ -1,0 +1,27 @@
+# Database files (too large for git)
+*.db
+*.sqlite
+*.sqlite3
+market_data.db
+
+# Parquet/CSV data files
+*.parquet
+data/*.csv
+
+# Logs
+*.log
+logs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
