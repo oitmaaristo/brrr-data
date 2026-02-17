@@ -1,0 +1,110 @@
+"""
+BRRR Capital Pi Data API
+Simple HTTP API to serve market data from Pi database.
+Port: 8374
+"""
+from flask import Flask, jsonify, request
+import sqlite3
+import time
+
+DB_PATH = "/home/kuldar/brrr-data/market_data.db"
+app = Flask(__name__)
+
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+@app.route('/api/status')
+def status():
+    conn = get_db()
+    try:
+        total = conn.execute("SELECT COUNT(*) FROM bars_1min").fetchone()[0]
+        symbols = conn.execute("""
+            SELECT symbol, COUNT(*) as bars, MIN(timestamp) as oldest, MAX(timestamp) as newest
+            FROM bars_1min GROUP BY symbol ORDER BY symbol
+        """).fetchall()
+        return jsonify({"status": "ok", "total_bars": total, "instruments": len(symbols), "symbols": [dict(s) for s in symbols]})
+    finally:
+        conn.close()
+
+@app.route('/api/instruments')
+def instruments():
+    conn = get_db()
+    try:
+        rows = conn.execute("SELECT DISTINCT symbol FROM bars_1min ORDER BY symbol").fetchall()
+        return jsonify({"instruments": [r[0] for r in rows]})
+    finally:
+        conn.close()
+
+@app.route('/api/bars/<symbol>')
+def bars(symbol):
+    from_ts = request.args.get('from_ts', type=int)
+    to_ts = request.args.get('to_ts', type=int)
+    limit = request.args.get('limit', 1000, type=int)
+    order = request.args.get('order', 'asc').lower()
+    recent = request.args.get('recent', 'false').lower() == 'true'
+
+    conn = get_db()
+    try:
+        query = "SELECT timestamp, open, high, low, close, volume FROM bars_1min WHERE symbol = ?"
+        params = [symbol]
+        if from_ts:
+            query += " AND timestamp >= ?"
+            params.append(from_ts)
+74        if to_ts:
+            query += " AND timestamp <= ?"
+            params.append(to_ts)
+
+        if recent:
+            query += " ORDER BY timestamp DESC LIMIT ?"
+            params.append(limit)
+            rows = conn.execute(query, params).fetchall()
+            rows = list(reversed(rows))
+        else:
+            order_sql = "DESC" if order == 'desc' else "ASC"
+            query += f" ORDER BY timestamp {order_sql} LIMIT ?"
+            params.append(limit)
+            rows = conn.execute(query, params).fetchall()
+
+        return jsonify({"symbol": symbol, "count": len(rows), "bars": [dict(r) for r in rows]})
+    finally:
+        conn.close()
+
+@app.route('/api/quotes')
+def quotes():
+    conn = get_db()
+    try:
+        rows = conn.execute("SELECT * FROM quotes ORDER BY symbol").fetchall()
+        return jsonify({"quotes": [dict(r) for r in rows]})
+    finally:
+        conn.close()
+
+@app.route('/api/health')
+def health():
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT MAX(timestamp) FROM bars_1min")
+        last_ts = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM bars_1min")
+        total_bars = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(DISTINCT symbol) FROM bars_1min")
+        symbols_count = cursor.fetchone()[0]
+        conn.close()
+        now = time.time()
+        seconds_since = (now - last_ts) if last_ts else None
+        status = "ok" if (seconds_since and seconds_since < 300) else "degraded"
+        return jsonify({
+            "status": status,
+            "last_bar_timestamp": last_ts,
+            "seconds_since_last_data": round(seconds_since, 1) if seconds_since else None,
+            "total_bars": total_bars,
+            "symbols_count": symbols_count
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+if __name__ == '__main__':
+    print("BRRR Pi Data API starting on port 8374...")
+    app.run(host='0.0.0.0', port=8374)
